@@ -3,6 +3,8 @@
 # pylint: disable=C0103
 # pylint: disable=E1101
 
+# python app.py 100 video2.mp4 video2.mp4
+
 # Resolution: 1920 x 1080
 #
 # 2D color
@@ -98,13 +100,16 @@ def compare_videos(path_video_1, path_video_2):
       frame_num = int(sys.argv[1])
       first_time = True
       use_descriptor = True
+      matched_area = None
       while frame_num:
         frame_num -= 1
         _, frame_2 = video_2.read()
         if first_time:
           print(frame_2.shape[0] * frame_2.shape[1])
           first_time = False
+
         if use_descriptor:
+          matched_area = None
           start_time = time.time()
           desc_kp_2, desc_des_2 = desc.detectAndCompute(frame_2, None)
           elapsed_time = time.time() - start_time
@@ -133,34 +138,12 @@ def compare_videos(path_video_1, path_video_2):
               h,w,d = frame_1.shape
               pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
               dst = cv2.perspectiveTransform(pts,M)
-              (top, bottom, left, right) = get_rect_from_dst(dst)
+              matched_area = get_rect_from_dst(dst)
               frame_2 = cv2.polylines(frame_2,[np.int32(dst)],True,255,3, cv2.LINE_AA)
-              area_2 = frame_2[top:bottom,left:right]
             else:
               print( "Not enough matches are found - {}/{}".format(len(good), MIN_MATCH_COUNT) )
               matchesMask = None
-            objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted)
-            sequence_2 = objects_2['sequence']
-            print('ref_seq', sequence_1)
-            print('new_seq', sequence_2)
-            draw_params = dict( # draw matches in green color
-                           #matchesMask = matchesMask, # draw only inliers
-                           matchesMask = matchesMask[:show_points], # draw only inliers
-                           flags = 2)
-            print("%s of %s rate %s" % (len(good), len(matches), len(good)/len(matches)))
-            matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None, **draw_params)
-            sm = edit_distance.SequenceMatcher(a=sequence_1, b=sequence_2)
-            sm.get_opcodes()
-            sm.ratio()
-            sm.get_matching_blocks()
-            distance = sm.distance()
-            num_matches = sm.matches()
-            if num_matches > 0:
-              pass
-            #matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good, None, **draw_params)
-          
           elif descriptor == "orb":
-
             FLANN_INDEX_LSH = 6
             index_params = dict(algorithm = FLANN_INDEX_LSH,
               table_number = 6, # 12
@@ -176,6 +159,38 @@ def compare_videos(path_video_1, path_video_2):
                 good.append(m)
             print(len(good))
             matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None)
+          
+          if matched_area:
+            area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
+            objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted)
+            sequence_2 = objects_2['sequence']
+            print('ref_seq', sequence_1)
+            print('new_seq', sequence_2)
+            num_matches = get_sequence_matches(sequence_1, sequence_2)
+            print('num_matches', num_matches)
+            if num_matches > 0:
+              print('ELEMENTS FOUND')
+              use_descriptor = False
+
+          #matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good, None, **draw_params)
+        else:
+          area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
+          objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted)
+          sequence_2 = objects_2['sequence']
+          print('ref_seq', sequence_1)
+          print('new_seq', sequence_2)
+          num_matches = get_sequence_matches(sequence_1, sequence_2)
+          print('num_matches', num_matches)
+          if num_matches > 0:
+            print('ELEMENTS WERE FOUND')
+          else:
+            use_descriptor = True
+
+        draw_params = dict(
+             matchesMask = matchesMask[:show_points], # draw only inliers
+             flags = 2)
+        print("%s of %s rate %s" % (len(good), len(matches), len(good)/len(matches)))
+        matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None, **draw_params)
 
         if out == None:
           out = cv2.VideoWriter('out.avi', fourcc, 30.0, (matches_img.shape[1], matches_img.shape[0]), True)
@@ -211,6 +226,15 @@ def detect_objects(image, thresh, detection_graph, sess, category_index, sequenc
       line_thickness=4,
       sequence_sorted=sequence_sorted)
   return box
+
+def get_sequence_matches(sequence_1, sequence_2):
+  sm = edit_distance.SequenceMatcher(a=sequence_1, b=sequence_2)
+  sm.get_opcodes()
+  sm.ratio()
+  sm.get_matching_blocks()
+  distance = sm.distance()
+  num_matches = sm.matches()
+  return num_matches
 
 def get_rect_from_dst(dst):
   top = int(dst[0][0][1]) if dst[0][0][1] < dst[3][0][1] else int(dst[3][0][1])
