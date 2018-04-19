@@ -65,7 +65,13 @@ def compare_videos(path_video_1, path_video_2):
   PATH_TO_LABELS = './labels.pbtxt'
   thresh = .2
   sequence_sorted = False
+  sequence_type = 'char'
+  store_output = False
   NUM_CLASSES = 90
+  trackers = {}
+  positions = {}
+  source_frame = 0
+  ok = None
   label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
   categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
   category_index = label_map_util.create_category_index(categories)
@@ -92,21 +98,82 @@ def compare_videos(path_video_1, path_video_2):
       video_2 = cv2.VideoCapture(path_video_2)
       out = None
       _, frame_1 = video_1.read()
-      objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted)
+      objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
       sequence_1 = objects_1['sequence']
+      objects_2 = None
+      area_2 = None
+      sequence_2 = ''
       desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
       print( desc.descriptorSize() )
       print( desc_des_1.shape )
+      until_end = False
       frame_num = int(sys.argv[1])
+      if frame_num == -1:
+        until_end = True
       first_time = True
       use_descriptor = True
+      use_detection = False
+      use_tracking = False
       matched_area = None
-      while frame_num:
+      frames_to_skip = 0
+      processed_frames = 0
+      while frame_num or until_end:
         frame_num -= 1
-        _, frame_2 = video_2.read()
+        ok, frame_2 = video_2.read()
+        if not ok:
+          break
         if first_time:
           print(frame_2.shape[0] * frame_2.shape[1])
           first_time = False
+
+        if use_tracking:
+          sequence_tmp = ''
+          for object_2 in objects_2['objects']:
+            start_time = time.time()
+            ok, box = trackers[object_2['coords']].update(frame_2)
+            box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+            elapsed_time = time.time() - start_time
+            #print('tracking', elapsed_time)  
+            if ok:
+              sequence_tmp += object_2['values'][sequence_type]
+              cv2.rectangle(frame_2, (box[0], box[2]), (box[1], box[3]), (255, 0, 0))
+          num_matches = len(sequence_tmp)
+          if num_matches > 0:
+            print('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_tmp))
+          else:
+            source_frame += processed_frames
+            print('skipped frames: %s' % (processed_frames))
+            video_1.set(cv2.CAP_PROP_POS_FRAMES, source_frame)
+            ok, frame_1 = video_1.read()
+            if not ok:
+              break
+            processed_frames = 0
+            objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
+            sequence_1 = objects_1['sequence']
+            desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
+            use_tracking = False
+            use_detection = False
+            use_descriptor = True
+
+        if use_detection:
+          area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
+          objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
+          sequence_2 = objects_2['sequence']
+          num_matches = get_sequence_matches(sequence_1, sequence_2)
+          print('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_2))
+          if num_matches > 0:
+            #print('ELEMENTS WERE FOUND')
+            trackers = {}
+            for object_2 in objects_2['objects']:
+              trackers[object_2['coords']] = cv2.TrackerKCF_create()
+              trackers[object_2['coords']].init(frame_2, object_2['coords'])
+            use_tracking = True
+            use_detection = False
+            use_descriptor = False
+          else:
+            use_tracking = False
+            use_detection = False
+            use_descriptor = True
 
         if use_descriptor:
           matched_area = None
@@ -162,7 +229,7 @@ def compare_videos(path_video_1, path_video_2):
           
           if matched_area:
             area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
-            objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted)
+            objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
             sequence_2 = objects_2['sequence']
             print('ref_seq', sequence_1)
             print('new_seq', sequence_2)
@@ -171,37 +238,28 @@ def compare_videos(path_video_1, path_video_2):
             if num_matches > 0:
               print('ELEMENTS FOUND')
               use_descriptor = False
+              use_detection = True
+              use_tracking = False
 
           #matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good, None, **draw_params)
-        else:
-          area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
-          objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted)
-          sequence_2 = objects_2['sequence']
-          print('ref_seq', sequence_1)
-          print('new_seq', sequence_2)
-          num_matches = get_sequence_matches(sequence_1, sequence_2)
-          print('num_matches', num_matches)
-          if num_matches > 0:
-            print('ELEMENTS WERE FOUND')
-          else:
-            use_descriptor = True
 
+        processed_frames += 1
         draw_params = dict(
              matchesMask = matchesMask[:show_points], # draw only inliers
              flags = 2)
-        print("%s of %s rate %s" % (len(good), len(matches), len(good)/len(matches)))
+        #print("%s of %s rate %s" % (len(good), len(matches), len(good)/len(matches)))
         matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None, **draw_params)
-
-        if out == None:
-          out = cv2.VideoWriter('out.avi', fourcc, 30.0, (matches_img.shape[1], matches_img.shape[0]), True)
+        if store_output:
+          if out == None:
+            out = cv2.VideoWriter('out.avi', fourcc, 30.0, (matches_img.shape[1], matches_img.shape[0]), True)
+          out.write(matches_img)
         cv2.imshow("Matches", matches_img)
-        out.write(matches_img)
         cv2.waitKey(1)
       out.release()
 
 
 
-def detect_objects(image, thresh, detection_graph, sess, category_index, sequence_sorted=False):
+def detect_objects(image, thresh, detection_graph, sess, category_index, sequence_sorted=False, sequence_type='char'):
   image_np = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
   image_np_expanded = np.expand_dims(image_np, axis=0)
   image_tensor = detection_graph.get_tensor_by_name('image_tensor:0')
@@ -224,7 +282,8 @@ def detect_objects(image, thresh, detection_graph, sess, category_index, sequenc
       min_score_thresh=thresh,
       use_normalized_coordinates=True,
       line_thickness=4,
-      sequence_sorted=sequence_sorted)
+      sequence_sorted=sequence_sorted,
+      sequence_type=sequence_type)
   return box
 
 def get_sequence_matches(sequence_1, sequence_2):

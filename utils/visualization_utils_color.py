@@ -335,7 +335,8 @@ def visualize_boxes_and_labels_on_image_array(image,
                                               min_score_thresh=.7,
                                               agnostic_mode=False,
                                               line_thickness=4,
-                                              sequence_sorted=False):
+                                              sequence_sorted=False,
+                                              sequence_type='char'):
   """Overlay labeled boxes on an image with formatted scores and label names.
 
   This function groups boxes that correspond to the same location
@@ -368,8 +369,9 @@ def visualize_boxes_and_labels_on_image_array(image,
   """
   # Create a display string (and color) for every box location, group any boxes
   # that correspond to the same location.
+  cur_char = 48
   result = {'sequence': '', 'objects': []}
-  class_values = {'id': 0, 'name': 'N/A', 'char': '', 'score': 0}
+  class_values = {'id': 0, 'name': 'N/A', 'char': '', 'uid': '', 'score': 0}
   box_to_display_str_map = collections.defaultdict(list)
   box_to_color_map = collections.defaultdict(str)
   box_to_instance_masks_map = {}
@@ -391,6 +393,8 @@ def visualize_boxes_and_labels_on_image_array(image,
           if classes[i] in category_index.keys():
             class_values = category_index[classes[i]]
           class_values['score'] = int(100*scores[i])
+          class_values['uid'] = chr(cur_char)
+          cur_char += 1
           display_str = '{}: {}%'.format(
               class_values['name'],
               class_values['score'])
@@ -405,8 +409,11 @@ def visualize_boxes_and_labels_on_image_array(image,
   for box, class_values in box_to_color_map.items():
     color = 'Violet'
     ymin, xmin, ymax, xmax = box
-    elements[xmin] = class_values['char']
-    result['objects'].append({'values': class_values, 'coords': box})
+    im_height, im_width, _ = image.shape
+    (left, right, top, bottom) = (int(xmin * im_width), int(xmax * im_width), int(ymin * im_height), int(ymax * im_height))
+    coords = (left, right, top, bottom)
+    elements[xmin] = class_values[sequence_type]
+    result['objects'].append({'values': class_values, 'coords': coords, 'norm': box})
     if instance_masks is not None:
       draw_mask_on_image_array(
           image,
