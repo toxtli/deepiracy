@@ -336,7 +336,8 @@ def visualize_boxes_and_labels_on_image_array(image,
                                               agnostic_mode=False,
                                               line_thickness=4,
                                               sequence_sorted=False,
-                                              sequence_type='char'):
+                                              sequence_type='char',
+                                              matched_area=None):
   """Overlay labeled boxes on an image with formatted scores and label names.
 
   This function groups boxes that correspond to the same location
@@ -412,8 +413,13 @@ def visualize_boxes_and_labels_on_image_array(image,
     im_height, im_width, _ = image.shape
     (left, right, top, bottom) = (int(xmin * im_width), int(xmax * im_width), int(ymin * im_height), int(ymax * im_height))
     coords = (left, right, top, bottom)
+    if matched_area is None:
+      global_coords = coords
+    else:
+      global_coords = (matched_area[2] + left, matched_area[2] + right, matched_area[0] + top, matched_area[0] + bottom)
+    crop = image[top:bottom,left:right]
     elements[xmin] = class_values[sequence_type]
-    result['objects'].append({'values': class_values, 'coords': coords, 'norm': box})
+    result['objects'].append({'values': class_values, 'coords': coords, 'global_coords': global_coords, 'norm': box, 'image': crop})
     if instance_masks is not None:
       draw_mask_on_image_array(
           image,
