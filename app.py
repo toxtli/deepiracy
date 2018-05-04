@@ -48,7 +48,9 @@ from imutils.video import FPS
 from utils import label_map_util
 from utils import visualization_utils_color as vis_util
 
-DEBUG = False
+DEBUG_TIME = False
+DEBUG_ALPHA = False
+DEBUG_SKIPS = False
 video_num = 0
 max_videos = 0
 video_path_1 = 0
@@ -56,6 +58,7 @@ video_path_2 = 0
 download_list = []
 download_item = None
 last_message = ''
+frames_skipped = 0
 cv2.ocl.setUseOpenCL(False)
 
 def compare_videos(path_video_1, path_video_2):
@@ -65,11 +68,16 @@ def compare_videos(path_video_1, path_video_2):
   thresh = 0.2
   sequence_sorted = False
   store_output = True
-  enable_tracking = True
+  enable_tracking = False
+  enable_detection = False
   adjust_frame = True
-  adjust_perspective = False
+  adjust_perspective = True
+  enable_tracking_template = True
+  only_use_template_when_none = True
+  enable_objects_threshold = False
   at_least_one_match = False
   sequence_type = 'char'
+  descriptor = "surf"
   tracker_type = 'KCF' # 'BOOSTING','MIL','KCF','TLD','MEDIANFLOW','GOTURN'
   NUM_CLASSES = 90
   MIN_MATCH_COUNT = 10
@@ -78,6 +86,13 @@ def compare_videos(path_video_1, path_video_2):
   positions = {}
   source_frame = 0
   ok = None
+  font = cv2.FONT_HERSHEY_SIMPLEX
+  size = 1
+  weight = 2
+  color = (255,255,255)
+  skips_max = 0
+  skips_number = 0
+  total_frames = 0
   
   last_message = ''
   label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
@@ -94,17 +109,23 @@ def compare_videos(path_video_1, path_video_2):
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     with tf.Session(graph=detection_graph, config=config) as sess:
+      total_time_init = time.time()
       fourcc = cv2.VideoWriter_fourcc(*'mp4v')
       #sift = cv2.xfeatures2d.SIFT_create()
       surf = cv2.xfeatures2d.SURF_create()
       #fast = cv2.FastFeatureDetector_create()
       #orb = cv2.ORB_create()
       desc = surf
-      descriptor = "surf"
       show_points = 20
       video_1 = cv2.VideoCapture(path_video_1)
       video_2 = cv2.VideoCapture(path_video_2)
       out = None
+      use_descriptor = True
+      use_detection = False
+      use_tracking = False
+      matched_area = None
+      frames_to_skip = 0
+      processed_frames = 0
       from_frame_1 = int(sys.argv[1])
       from_frame_2 = int(sys.argv[2])
       video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1)
@@ -112,6 +133,7 @@ def compare_videos(path_video_1, path_video_2):
       _, frame_1 = video_1.read()
       objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
       sequence_1 = objects_1['sequence']
+      cv2.putText(frame_1, "skip: %s src: %s" % (processed_frames, sequence_1), (10, 30), font, size, color, weight)
       objects_2 = None
       area_2 = None
       sequence_2 = ''
@@ -122,13 +144,8 @@ def compare_videos(path_video_1, path_video_2):
       frame_num = int(sys.argv[3])
       if frame_num == -1:
         until_end = True
-      use_descriptor = True
-      use_detection = False
-      use_tracking = False
-      matched_area = None
-      frames_to_skip = 0
-      processed_frames = 0
       while frame_num or until_end:
+        total_frames += 1
         frame_num -= 1
         ok, frame_2 = video_2.read()
         if not ok:
@@ -142,38 +159,54 @@ def compare_videos(path_video_1, path_video_2):
               ok, box = trackers[object_2['coords']].update(frame_2)
               box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
               elapsed_time = time.time() - start_time
-              #print('tracking', elapsed_time)  
+              if DEBUG_TIME:
+                print('tracking method', elapsed_time)  
               if ok:
                 sequence_tmp += object_2['values'][sequence_type]
                 cv2.rectangle(frame_2, (box[0], box[2]), (box[1], box[3]), (255, 0, 0), 2)
               else:
-                res = cv2.matchTemplate(frame_2, object_2['image'], cv2.TM_CCOEFF_NORMED)
-                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-                threshold = 0.8
-                if max_val > threshold:
-                  sequence_tmp += object_2['values'][sequence_type]
-                  top_left = max_loc
-                  h, w, _ = object_2['image'].shape
-                  bottom_right = (top_left[0] + w, top_left[1] + h)
-                  cv2.rectangle(frame_2, top_left, bottom_right, (0, 255, 0), 2)
+                if enable_tracking_template:
+                  process_static = True
+                  if only_use_template_when_none:
+                    num_matches = get_sequence_matches(sequence_1, sequence_tmp)
+                    if num_matches > 0:
+                      process_static = False
+                  if process_static:
+                    start_time = time.time()
+                    res = cv2.matchTemplate(frame_2, object_2['image'], cv2.TM_CCOEFF_NORMED)
+                    elapsed_time = time.time() - start_time
+                    if DEBUG_TIME:
+                      print('tracking match', elapsed_time) 
+                    min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                    threshold = 0.8
+                    if max_val > threshold:
+                      sequence_tmp += object_2['values'][sequence_type]
+                      top_left = max_loc
+                      h, w, _ = object_2['image'].shape
+                      bottom_right = (top_left[0] + w, top_left[1] + h)
+                      cv2.rectangle(frame_2, top_left, bottom_right, (0, 255, 0), 2)
 
-          num_matches = len(sequence_tmp)
+          cv2.putText(frame_2, "alp: %s" % (sequence_2), (10, 30), font, size, color, weight)
+          num_matches = get_sequence_matches(sequence_1, sequence_tmp)
           if num_matches > 0:
-            print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_tmp))
+            if DEBUG_ALPHA:
+              print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_tmp))
           else:
-            """
             source_frame += processed_frames
-            print('skipped frames: %s' % (processed_frames))
+            if DEBUG_SKIPS:
+              print('skipped frames: %s' % (processed_frames))
+            skips_number += 1
+            skips_max = processed_frames if processed_frames > skips_max else skips_max
             video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
             ok, frame_1 = video_1.read()
-            processed_frames = 0
             objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
             sequence_1 = objects_1['sequence']
+            cv2.putText(frame_1, "skip: %s src: %s" % (processed_frames, sequence_1), (10, 30), font, size, color, weight)
             desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
-            """
             use_tracking = False
             use_detection = True
             use_descriptor = False
+            processed_frames = 0
 
         if use_detection:
           if adjust_frame:
@@ -182,17 +215,21 @@ def compare_videos(path_video_1, path_video_2):
             area_2 = frame_2
           objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, matched_area=matched_area, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
           sequence_2 = objects_2['sequence']
+          cv2.putText(frame_2, "alp: %s" % (sequence_2), (10, 30), font, size, color, weight)
           num_matches = get_sequence_matches(sequence_1, sequence_2)
-          print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_2))
+          if DEBUG_ALPHA:
+            print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_2))
           if num_matches > 0:
             trackers = {}
             were_coords_valid = False
             if enable_tracking:
               for object_2 in objects_2['objects']:
-                coords_valid = are_coords_valid(object_2['coords'], area_2.shape)
-                if coords_valid:
+                if are_coords_valid(object_2['coords'], area_2.shape):
                     trackers[object_2['coords']] = create_tracker(tracker_type)
-                    trackers[object_2['coords']].init(frame_2, object_2['global_coords'])
+                    if adjust_frame:
+                      trackers[object_2['coords']].init(frame_2, object_2['global_coords'])
+                    else:
+                      trackers[object_2['coords']].init(frame_2, object_2['coords'])
                     were_coords_valid = True
             if were_coords_valid:
               if enable_tracking:
@@ -213,9 +250,13 @@ def compare_videos(path_video_1, path_video_2):
             use_descriptor = True
             if not enable_tracking:
               source_frame += processed_frames
-              print('detector skipped frames: %s' % (processed_frames))
+              if DEBUG_SKIPS:
+                print('detector skipped frames: %s' % (processed_frames))
+              skips_number += 1
+              skips_max = processed_frames if processed_frames > skips_max else skips_max
               video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
               ok, frame_1 = video_1.read()
+              cv2.putText(frame_1, "skip: %s" % (processed_frames), (10, 30), font, size, color, weight)
               desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
               processed_frames = 0           
 
@@ -225,7 +266,7 @@ def compare_videos(path_video_1, path_video_2):
           start_time = time.time()
           desc_kp_2, desc_des_2 = desc.detectAndCompute(frame_2, None)
           elapsed_time = time.time() - start_time
-          if DEBUG:
+          if DEBUG_TIME:
             print(descriptor, elapsed_time)
 
           if descriptor == "sift" or descriptor == "surf" or descriptor == "fast":
@@ -239,7 +280,7 @@ def compare_videos(path_video_1, path_video_2):
             except:
               matches = []
             elapsed_time = time.time() - start_time
-            if DEBUG:
+            if DEBUG_TIME:
               print('FLANN', elapsed_time)
             good = []
             for m,n in matches:
@@ -258,7 +299,7 @@ def compare_videos(path_video_1, path_video_2):
               pts = np.float32([ [0,0],[0,h-1],[w-1,h-1],[w-1,0] ]).reshape(-1,1,2)
               try:
                 dst = cv2.perspectiveTransform(pts,M)
-                matched_area = get_rect_from_dst(dst)
+                matched_area = get_rect_from_dst(dst, frame_2.shape)
                 trans_coords = get_transformed_coords(dst, matched_area)
                 frame_2 = cv2.polylines(frame_2,[np.int32(dst)],True,255,3, cv2.LINE_AA)
                 calc_height = matched_area[1] - matched_area[0]
@@ -267,56 +308,65 @@ def compare_videos(path_video_1, path_video_2):
                 frame_width = frame_2.shape[1]
                 sim_rate = 1 + (((1 - (calc_height / frame_height)) + (1 - (calc_width / frame_width))) / 2)
                 similarity *= sim_rate
-                print(similarity)
                 if similarity > SIMILARITY_THRESHOLD:
                   descriptor_matched = True
               except:
                 pass
             else:
-              if DEBUG:
+              if DEBUG_TIME:
                 print( "Not enough matches were found - {}/{}".format(len(good), MIN_MATCH_COUNT) )
               matchesMask = None
 
           if not descriptor_matched:
             if at_least_one_match:
               source_frame += processed_frames
-              print('descriptor skipped frames: %s' % (processed_frames))
+              if DEBUG_SKIPS:
+                print('descriptor skipped frames: %s' % (processed_frames))
+              skips_number += 1
+              skips_max = processed_frames if processed_frames > skips_max else skips_max
               video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
               ok, frame_1 = video_1.read()
+              cv2.putText(frame_1, "skip: %s" % (processed_frames), (10, 30), font, size, color, weight)
               desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
               processed_frames = 0
           else:
             at_least_one_match = True
-            if adjust_frame:
-              if is_matched_area_okay(matched_area, frame_2.shape):
-                area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
-                area_2 = cv2.polylines(area_2,[np.array(trans_coords)],True,255,3, cv2.LINE_AA)
-                if adjust_perspective:
-                  area_2 = four_point_transform(area_2, trans_coords)
+            if enable_detection:
+              if adjust_frame:
+                if is_matched_area_okay(trans_coords, frame_2.shape):
+                  area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
+                  area_2 = cv2.polylines(area_2,[np.array(trans_coords)],True,255,3, cv2.LINE_AA)
+                  if adjust_perspective:
+                    area_2 = four_point_transform(area_2, trans_coords)
+                else:
+                  area_2 = frame_2  
               else:
-                area_2 = frame_2  
-            else:
-              area_2 = frame_2
-            objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, matched_area=matched_area, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
-            sequence_2 = objects_2['sequence']
-            num_matches = get_sequence_matches(sequence_1, sequence_2)
-            print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_2))
-            if num_matches > 0:
-              use_descriptor = False
-              use_detection = True
-              use_tracking = False
-            else:
-              source_frame += processed_frames
-              print('descriptor detector skipped frames: %s' % (processed_frames))
-              video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
-              ok, frame_1 = video_1.read()
-              desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
-              objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
-              sequence_1 = objects_1['sequence']
-              processed_frames = 0
-              use_descriptor = True
-              use_detection = False
-              use_tracking = False    
+                area_2 = frame_2
+              objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, matched_area=matched_area, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
+              sequence_2 = objects_2['sequence']
+              cv2.putText(frame_2, "alp: %s" % (sequence_2), (10, 30), font, size, color, weight)
+              num_matches = get_sequence_matches(sequence_1, sequence_2)
+              if DEBUG_ALPHA:
+                print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_2))
+              if num_matches > 0:
+                use_descriptor = False
+                use_detection = True
+                use_tracking = False
+              else:
+                source_frame += processed_frames
+                if DEBUG_SKIPS:
+                  print('descriptor detector skipped frames: %s' % (processed_frames))
+                skips_number += 1
+                skips_max = processed_frames if processed_frames > skips_max else skips_max
+                video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+                ok, frame_1 = video_1.read()
+                desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
+                objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
+                sequence_1 = objects_1['sequence']
+                processed_frames = 0
+                use_descriptor = True
+                use_detection = False
+                use_tracking = False 
 
           #matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good, None, **draw_params)
 
@@ -340,9 +390,14 @@ def compare_videos(path_video_1, path_video_2):
       if store_output:
         if out is not None:
           out.release()
+      print('--- STATS ---')
+      total_time = time.time() - total_time_init
+      print('TOTAL TIME: ', total_time)
+      print('TOTAL FRAMES: ', total_frames)
+      print('SKIPS NUMBER: ', skips_number)
+      print('MAX SKIP: ', skips_max)
 
 def is_matched_area_okay(matched_area, frame_2_shape):
-  print(matched_area)
   return True
 
 def print_once(message):
@@ -429,7 +484,7 @@ def detect_objects(image, thresh, detection_graph, sess, category_index, matched
         [boxes, scores, classes, num_detections],
         feed_dict={image_tensor: image_np_expanded})
     elapsed_time = time.time() - start_time
-    if DEBUG:
+    if DEBUG_TIME:
       print('cnn', elapsed_time)
     box = vis_util.visualize_boxes_and_labels_on_image_array(
         image,
@@ -459,11 +514,15 @@ def get_sequence_matches(sequence_1, sequence_2):
   else:
     return 0
 
-def get_rect_from_dst(dst):
+def get_rect_from_dst(dst, orig):
   top = int(dst[0][0][1]) if dst[0][0][1] < dst[3][0][1] else int(dst[3][0][1])
   bottom = int(dst[1][0][1]) if dst[1][0][1] > dst[2][0][1] else int(dst[2][0][1])
   left = int(dst[0][0][0]) if dst[0][0][0] < dst[1][0][0] else int(dst[1][0][0])
   right = int(dst[2][0][0]) if dst[2][0][0] > dst[3][0][0] else int(dst[3][0][0])
+  top = 0 if top < 0 else top
+  left = 0 if left < 0 else left
+  bottom = orig[0] if bottom > orig[0] else bottom
+  right = orig[1] if right > orig[1] else right
   return (top, bottom, left, right)
 
 def get_area_coords(dts):
@@ -560,7 +619,7 @@ def compare_2d_color_images(frame_1, frame_2):
         matches_num += 1
   rate = matches_num / size
   elapsed_time = time.time() - start_time
-  if DEBUG:
+  if DEBUG_TIME:
     print('iterate_2d', elapsed_time)
 
 def compare_2d_gray_images(frame_1, frame_2):
@@ -577,7 +636,7 @@ def compare_2d_gray_images(frame_1, frame_2):
         matches_num += 1
   rate = matches_num / size
   elapsed_time = time.time() - start_time
-  if DEBUG:
+  if DEBUG_TIME:
     print('iterate_2d', elapsed_time)
 
 def compare_1d_gray_images(frame_1, frame_2):
@@ -593,7 +652,7 @@ def compare_1d_gray_images(frame_1, frame_2):
         matches_num += 1
   rate = matches_num / size
   elapsed_time = time.time() - start_time
-  if DEBUG:
+  if DEBUG_TIME:
     print('iterate_1d', elapsed_time)
 
 #load_from_youtube()
