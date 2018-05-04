@@ -38,6 +38,7 @@ import os
 import sys
 import cv2
 import time
+import signal
 import youtube_dl
 import numpy as np
 import edit_distance
@@ -57,61 +58,18 @@ download_item = None
 last_message = ''
 cv2.ocl.setUseOpenCL(False)
 
-def print_once(message):
-  global last_message
-  if message != last_message:
-    last_message = message
-    print(last_message)
-
-def youtube_download_hook(download):
-  global download_item
-  if download["status"] == "finished":
-    print(download["filename"])
-    video_num = download_item['index']
-    os.rename(download["filename"], "internet%s.mp4" % (video_num))
-    continue_downloads()
-
-def load_from_youtube(video):
-  ydl_opts = {"format": "mp4", "progress_hooks": [youtube_download_hook]}
-  youtube_dl.YoutubeDL(ydl_opts).download([video])
-
-def get_and_compare_videos(path_1, path_2, skip=False):
-  global video_path_1, video_path_2, max_videos, download_list
-  need_download = False
-  video_path_1 = path_1
-  if 'http' in path_1:
-    download_list.append({'source': path_1, 'index': 1})
-    video_path_1 = 'internet1.mp4'
-  elif path_1 == '0':
-    video_path_1 = 0
-  video_path_2 = path_2
-  if 'http' in path_2:
-    download_list.append({'source': path_2, 'index': 2})
-    video_path_2 = 'internet2.mp4'
-  elif path_2 == '0':
-    video_path_2 = 0
-  if len(download_list) == 0:
-    compare_videos(video_path_1, video_path_2)
-  else:
-    continue_downloads()
-
-def continue_downloads():
-  global download_list, download_item, video_path_1, video_path_2
-  if len(download_list) > 0:
-    download_item = download_list.pop(0)
-    load_from_youtube(download_item['source'])
-  else:
-    compare_videos(video_path_1, video_path_2)
-
 def compare_videos(path_video_1, path_video_2):
   global detection_graph, from_frame
   PATH_TO_CKPT = './ssd_inception2.pb'
   PATH_TO_LABELS = './labels.pbtxt'
   thresh = 0.2
   sequence_sorted = False
-  sequence_type = 'char'
   store_output = True
   enable_tracking = True
+  adjust_frame = True
+  adjust_perspective = False
+  at_least_one_match = False
+  sequence_type = 'char'
   tracker_type = 'KCF' # 'BOOSTING','MIL','KCF','TLD','MEDIANFLOW','GOTURN'
   NUM_CLASSES = 90
   MIN_MATCH_COUNT = 10
@@ -120,8 +78,7 @@ def compare_videos(path_video_1, path_video_2):
   positions = {}
   source_frame = 0
   ok = None
-  at_least_one_match = False
-  adjust_frame = False
+  
   last_message = ''
   label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
   categories = label_map_util.convert_label_map_to_categories(label_map, max_num_classes=NUM_CLASSES, use_display_name=True)
@@ -180,24 +137,25 @@ def compare_videos(path_video_1, path_video_2):
         if use_tracking:
           sequence_tmp = ''
           for object_2 in objects_2['objects']:
-            start_time = time.time()
-            ok, box = trackers[object_2['coords']].update(frame_2)
-            box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-            elapsed_time = time.time() - start_time
-            #print('tracking', elapsed_time)  
-            if ok:
-              sequence_tmp += object_2['values'][sequence_type]
-              cv2.rectangle(frame_2, (box[0], box[2]), (box[1], box[3]), (255, 0, 0), 2)
-            else:
-              res = cv2.matchTemplate(frame_2, object_2['image'], cv2.TM_CCOEFF_NORMED)
-              min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
-              threshold = 0.8
-              if max_val > threshold:
+            if object_2['coords'] in trackers:
+              start_time = time.time()
+              ok, box = trackers[object_2['coords']].update(frame_2)
+              box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+              elapsed_time = time.time() - start_time
+              #print('tracking', elapsed_time)  
+              if ok:
                 sequence_tmp += object_2['values'][sequence_type]
-                top_left = max_loc
-                h, w, _ = object_2['image'].shape
-                bottom_right = (top_left[0] + w, top_left[1] + h)
-                cv2.rectangle(frame_2, top_left, bottom_right, (0, 255, 0), 2)
+                cv2.rectangle(frame_2, (box[0], box[2]), (box[1], box[3]), (255, 0, 0), 2)
+              else:
+                res = cv2.matchTemplate(frame_2, object_2['image'], cv2.TM_CCOEFF_NORMED)
+                min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+                threshold = 0.8
+                if max_val > threshold:
+                  sequence_tmp += object_2['values'][sequence_type]
+                  top_left = max_loc
+                  h, w, _ = object_2['image'].shape
+                  bottom_right = (top_left[0] + w, top_left[1] + h)
+                  cv2.rectangle(frame_2, top_left, bottom_right, (0, 255, 0), 2)
 
           num_matches = len(sequence_tmp)
           if num_matches > 0:
@@ -218,21 +176,24 @@ def compare_videos(path_video_1, path_video_2):
             use_descriptor = False
 
         if use_detection:
-          area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
-          objects_2 =  detect_objects(frame_2, thresh, detection_graph, sess, category_index, matched_area=matched_area, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
+          if adjust_frame:
+            area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
+          else:
+            area_2 = frame_2
+          objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, matched_area=matched_area, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
           sequence_2 = objects_2['sequence']
           num_matches = get_sequence_matches(sequence_1, sequence_2)
           print_once('eq: %s ref: %s new: %s' % (num_matches, sequence_1, sequence_2))
           if num_matches > 0:
             trackers = {}
-            were_coords_valid = True
-            for object_2 in objects_2['objects']:
-              if are_coords_valid(object_2['coords'], area_2.shape):
-                trackers[object_2['coords']] = create_tracker(tracker_type)
-                trackers[object_2['coords']].init(frame_2, object_2['global_coords'])
-              else:
-                were_coords_valid = False
-                break
+            were_coords_valid = False
+            if enable_tracking:
+              for object_2 in objects_2['objects']:
+                coords_valid = are_coords_valid(object_2['coords'], area_2.shape)
+                if coords_valid:
+                    trackers[object_2['coords']] = create_tracker(tracker_type)
+                    trackers[object_2['coords']].init(frame_2, object_2['global_coords'])
+                    were_coords_valid = True
             if were_coords_valid:
               if enable_tracking:
                 use_tracking = True
@@ -250,6 +211,13 @@ def compare_videos(path_video_1, path_video_2):
             use_tracking = False
             use_detection = False
             use_descriptor = True
+            if not enable_tracking:
+              source_frame += processed_frames
+              print('detector skipped frames: %s' % (processed_frames))
+              video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+              ok, frame_1 = video_1.read()
+              desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
+              processed_frames = 0           
 
         if use_descriptor:
           matched_area = None
@@ -312,17 +280,23 @@ def compare_videos(path_video_1, path_video_2):
           if not descriptor_matched:
             if at_least_one_match:
               source_frame += processed_frames
-              print('skipped frames: %s' % (processed_frames))
+              print('descriptor skipped frames: %s' % (processed_frames))
               video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
               ok, frame_1 = video_1.read()
               desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
               processed_frames = 0
           else:
             at_least_one_match = True
-            area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
-            area_2 = cv2.polylines(area_2,[np.array(trans_coords)],True,255,3, cv2.LINE_AA)
             if adjust_frame:
-              area_2 = four_point_transform(area_2, trans_coords)
+              if is_matched_area_okay(matched_area, frame_2.shape):
+                area_2 = frame_2[matched_area[0]:matched_area[1],matched_area[2]:matched_area[3]]
+                area_2 = cv2.polylines(area_2,[np.array(trans_coords)],True,255,3, cv2.LINE_AA)
+                if adjust_perspective:
+                  area_2 = four_point_transform(area_2, trans_coords)
+              else:
+                area_2 = frame_2  
+            else:
+              area_2 = frame_2
             objects_2 =  detect_objects(area_2, thresh, detection_graph, sess, category_index, matched_area=matched_area, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
             sequence_2 = objects_2['sequence']
             num_matches = get_sequence_matches(sequence_1, sequence_2)
@@ -333,7 +307,7 @@ def compare_videos(path_video_1, path_video_2):
               use_tracking = False
             else:
               source_frame += processed_frames
-              print('skipped frames: %s' % (processed_frames))
+              print('descriptor detector skipped frames: %s' % (processed_frames))
               video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
               ok, frame_1 = video_1.read()
               desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
@@ -353,7 +327,10 @@ def compare_videos(path_video_1, path_video_2):
              matchesMask = matchesMask[:show_points], # draw only inliers
              flags = 2)
         #print("%s of %s rate %s" % (len(good), len(matches), len(good)/len(matches)))
-        matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None, **draw_params)
+        try:
+          matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None, **draw_params)
+        except:
+          matches_img = frame_1
         if store_output:
           if out == None:
             out = cv2.VideoWriter('out.avi', fourcc, 30.0, (matches_img.shape[1], matches_img.shape[0]), True)
@@ -363,6 +340,56 @@ def compare_videos(path_video_1, path_video_2):
       if store_output:
         if out is not None:
           out.release()
+
+def is_matched_area_okay(matched_area, frame_2_shape):
+  print(matched_area)
+  return True
+
+def print_once(message):
+  global last_message
+  if message != last_message:
+    last_message = message
+    print(last_message)
+
+def youtube_download_hook(download):
+  global download_item
+  if download["status"] == "finished":
+    print(download["filename"])
+    video_num = download_item['index']
+    os.rename(download["filename"], "internet%s.mp4" % (video_num))
+    continue_downloads()
+
+def load_from_youtube(video):
+  ydl_opts = {"format": "mp4", "progress_hooks": [youtube_download_hook]}
+  youtube_dl.YoutubeDL(ydl_opts).download([video])
+
+def get_and_compare_videos(path_1, path_2, skip=False):
+  global video_path_1, video_path_2, max_videos, download_list
+  need_download = False
+  video_path_1 = path_1
+  if 'http' in path_1:
+    download_list.append({'source': path_1, 'index': 1})
+    video_path_1 = 'internet1.mp4'
+  elif path_1 == '0':
+    video_path_1 = 0
+  video_path_2 = path_2
+  if 'http' in path_2:
+    download_list.append({'source': path_2, 'index': 2})
+    video_path_2 = 'internet2.mp4'
+  elif path_2 == '0':
+    video_path_2 = 0
+  if len(download_list) == 0:
+    compare_videos(video_path_1, video_path_2)
+  else:
+    continue_downloads()
+
+def continue_downloads():
+  global download_list, download_item, video_path_1, video_path_2
+  if len(download_list) > 0:
+    download_item = download_list.pop(0)
+    load_from_youtube(download_item['source'])
+  else:
+    compare_videos(video_path_1, video_path_2)
 
 def create_tracker(tracker_type):
   if tracker_type == 'BOOSTING':
@@ -381,8 +408,10 @@ def create_tracker(tracker_type):
     return cv2.TrackerKCF_create()
 
 def are_coords_valid(box, orig):
-  threshold = 0.9
-  if ((box[1] - box[0])/orig[1]) > threshold and ((box[3] - box[2])/orig[0]) > threshold:
+  threshold = 0.8
+  calc_height = ((box[1] - box[0])/orig[1])
+  calc_width = ((box[3] - box[2])/orig[0])
+  if calc_height >= threshold and calc_width >= threshold:
     return False
   return True
 
