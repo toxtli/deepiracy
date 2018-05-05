@@ -68,8 +68,8 @@ def compare_videos(path_video_1, path_video_2):
   thresh = 0.2
   sequence_sorted = False
   store_output = True
-  enable_tracking = False
-  enable_detection = False
+  enable_tracking = True
+  enable_detection = True
   adjust_frame = True
   adjust_perspective = True
   enable_tracking_template = True
@@ -78,7 +78,7 @@ def compare_videos(path_video_1, path_video_2):
   at_least_one_match = False
   sequence_type = 'char'
   descriptor = "surf"
-  tracker_type = 'KCF' # 'BOOSTING','MIL','KCF','TLD','MEDIANFLOW','GOTURN'
+  tracker_type = 'MEDIANFLOW' # 'BOOSTING','MIL','KCF','TLD','MEDIANFLOW','GOTURN'
   NUM_CLASSES = 90
   MIN_MATCH_COUNT = 10
   SIMILARITY_THRESHOLD = 0.1
@@ -118,7 +118,13 @@ def compare_videos(path_video_1, path_video_2):
       desc = surf
       show_points = 20
       video_1 = cv2.VideoCapture(path_video_1)
+      fps_1 = video_1.get(cv2.CAP_PROP_FPS)
+      if DEBUG_TIME:
+        print('fps_1', fps_1)
       video_2 = cv2.VideoCapture(path_video_2)
+      fps_2 = video_1.get(cv2.CAP_PROP_FPS)
+      if DEBUG_TIME:
+        print('fps_2', fps_2)
       out = None
       use_descriptor = True
       use_detection = False
@@ -370,7 +376,8 @@ def compare_videos(path_video_1, path_video_2):
 
           #matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good, None, **draw_params)
 
-        processed_frames += 1
+        if at_least_one_match:
+          processed_frames += 1
         if matchesMask is None:
           matchesMask = []
         draw_params = dict(
