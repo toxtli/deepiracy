@@ -70,7 +70,7 @@ def compare_videos(path_video_1, path_video_2):
   thresh = 0.2
   sequence_sorted = False
   store_output = True
-  enable_tracking = False
+  enable_tracking = True
   enable_detection = True
   adjust_frame = True
   adjust_perspective = True
@@ -154,7 +154,13 @@ def compare_videos(path_video_1, path_video_2):
       if frame_num == -1:
         until_end = True
       while frame_num or until_end:
-        total_frames += 1
+        if not recalculate_fps:
+          total_frames += 1
+        else:
+          if at_least_one_match:
+            to_frame = from_frame_1 + math.ceil((time.time() - recalculate_time) * fps_1)
+            if to_frame >= frame_num:
+              break
         frame_num -= 1
         ok, frame_2 = video_2.read()
         if not ok:
