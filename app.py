@@ -38,6 +38,7 @@ import os
 import sys
 import cv2
 import time
+import math
 import signal
 import youtube_dl
 import numpy as np
@@ -59,16 +60,17 @@ download_list = []
 download_item = None
 last_message = ''
 frames_skipped = 0
+recalculate_fps = False
 cv2.ocl.setUseOpenCL(False)
 
 def compare_videos(path_video_1, path_video_2):
-  global detection_graph, from_frame
+  global detection_graph, from_frame, recalculate_fps
   PATH_TO_CKPT = './ssd_inception2.pb'
   PATH_TO_LABELS = './labels.pbtxt'
   thresh = 0.2
   sequence_sorted = False
   store_output = True
-  enable_tracking = True
+  enable_tracking = False
   enable_detection = True
   adjust_frame = True
   adjust_perspective = True
@@ -76,6 +78,7 @@ def compare_videos(path_video_1, path_video_2):
   only_use_template_when_none = True
   enable_objects_threshold = False
   at_least_one_match = False
+  recalculate_time = 0
   sequence_type = 'char'
   descriptor = "surf"
   tracker_type = 'MEDIANFLOW' # 'BOOSTING','MIL','KCF','TLD','MEDIANFLOW','GOTURN'
@@ -122,7 +125,7 @@ def compare_videos(path_video_1, path_video_2):
       if DEBUG_TIME:
         print('fps_1', fps_1)
       video_2 = cv2.VideoCapture(path_video_2)
-      fps_2 = video_1.get(cv2.CAP_PROP_FPS)
+      fps_2 = video_2.get(cv2.CAP_PROP_FPS)
       if DEBUG_TIME:
         print('fps_2', fps_2)
       out = None
@@ -203,7 +206,11 @@ def compare_videos(path_video_1, path_video_2):
               print('skipped frames: %s' % (processed_frames))
             skips_number += 1
             skips_max = processed_frames if processed_frames > skips_max else skips_max
-            video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+            if not recalculate_fps:
+              video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+            else:
+              to_frame = from_frame_1 + math.ceil((time.time() - recalculate_time) * fps_1)
+              video_1.set(cv2.CAP_PROP_POS_FRAMES, to_frame)
             ok, frame_1 = video_1.read()
             objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
             sequence_1 = objects_1['sequence']
@@ -260,7 +267,11 @@ def compare_videos(path_video_1, path_video_2):
                 print('detector skipped frames: %s' % (processed_frames))
               skips_number += 1
               skips_max = processed_frames if processed_frames > skips_max else skips_max
-              video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+              if not recalculate_fps:
+                video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+              else:
+                to_frame = from_frame_1 + math.ceil((time.time() - recalculate_time) * fps_1)
+                video_1.set(cv2.CAP_PROP_POS_FRAMES, to_frame)
               ok, frame_1 = video_1.read()
               cv2.putText(frame_1, "skip: %s" % (processed_frames), (10, 30), font, size, color, weight)
               desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
@@ -330,12 +341,18 @@ def compare_videos(path_video_1, path_video_2):
                 print('descriptor skipped frames: %s' % (processed_frames))
               skips_number += 1
               skips_max = processed_frames if processed_frames > skips_max else skips_max
-              video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+              if not recalculate_fps:
+                video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+              else:
+                to_frame = from_frame_1 + math.ceil((time.time() - recalculate_time) * fps_1)
+                video_1.set(cv2.CAP_PROP_POS_FRAMES, to_frame)
               ok, frame_1 = video_1.read()
               cv2.putText(frame_1, "skip: %s" % (processed_frames), (10, 30), font, size, color, weight)
               desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
               processed_frames = 0
           else:
+            if not at_least_one_match and recalculate_fps:
+              recalculate_time = time.time()
             at_least_one_match = True
             if enable_detection:
               if adjust_frame:
@@ -364,7 +381,11 @@ def compare_videos(path_video_1, path_video_2):
                   print('descriptor detector skipped frames: %s' % (processed_frames))
                 skips_number += 1
                 skips_max = processed_frames if processed_frames > skips_max else skips_max
-                video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+                if not recalculate_fps:
+                  video_1.set(cv2.CAP_PROP_POS_FRAMES, from_frame_1 + source_frame)
+                else:
+                  to_frame = from_frame_1 + math.ceil((time.time() - recalculate_time) * fps_1)
+                  video_1.set(cv2.CAP_PROP_POS_FRAMES, to_frame)
                 ok, frame_1 = video_1.read()
                 desc_kp_1, desc_des_1 = desc.detectAndCompute(frame_1, None)
                 objects_1 = detect_objects(frame_1, thresh, detection_graph, sess, category_index, sequence_sorted=sequence_sorted, sequence_type=sequence_type)
@@ -426,7 +447,7 @@ def load_from_youtube(video):
   youtube_dl.YoutubeDL(ydl_opts).download([video])
 
 def get_and_compare_videos(path_1, path_2, skip=False):
-  global video_path_1, video_path_2, max_videos, download_list
+  global video_path_1, video_path_2, max_videos, download_list, recalculate_fps
   need_download = False
   video_path_1 = path_1
   if 'http' in path_1:
@@ -434,12 +455,14 @@ def get_and_compare_videos(path_1, path_2, skip=False):
     video_path_1 = 'internet1.mp4'
   elif path_1 == '0':
     video_path_1 = 0
+    recalculate_fps = True
   video_path_2 = path_2
   if 'http' in path_2:
     download_list.append({'source': path_2, 'index': 2})
     video_path_2 = 'internet2.mp4'
   elif path_2 == '0':
     video_path_2 = 0
+    recalculate_fps = True
   if len(download_list) == 0:
     compare_videos(video_path_1, video_path_2)
   else:
