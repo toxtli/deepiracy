@@ -3,36 +3,7 @@
 # pylint: disable=C0103
 # pylint: disable=E1101
 
-# python app.py 100 video2.mp4 video2.mp4
-
-# Resolution: 1920 x 1080
-#
-# 2D color
-# Operations = 1920 x 1080 x 3
-# Time = 2.372
-#
-# 2D gray
-# Operations = 1920 x 1080
-# Time = 0.521
-#
-# SURF
-# Time = 0.243
-#
-# CNN
-# Time = 0.087
-#
-# Tracking
-# Time = 0.003
-#
-# FLANN
-# Size 1 = 4542
-# Size 2 = 4117
-# Time = 0.109
-#
-# BFMatcher
-# Size 1 = 4542
-# Size 2 = 4117
-# Time = 0.164
+# python app.py 1 1 -1 video1.mp4 video1.mp4
 
 import os
 import sys
@@ -52,6 +23,10 @@ from utils import visualization_utils_color as vis_util
 DEBUG_TIME = False
 DEBUG_ALPHA = False
 DEBUG_SKIPS = False
+out = None
+last_frame = None
+last_time = None
+out_fps = 30
 video_num = 0
 max_videos = 0
 video_path_1 = 0
@@ -64,7 +39,7 @@ recalculate_fps = False
 cv2.ocl.setUseOpenCL(False)
 
 def compare_videos(path_video_1, path_video_2):
-  global detection_graph, from_frame, recalculate_fps
+  global detection_graph, from_frame, recalculate_fps, out
   PATH_TO_CKPT = './ssd_inception2.pb'
   PATH_TO_LABELS = './labels.pbtxt'
   thresh = 0.2
@@ -418,11 +393,16 @@ def compare_videos(path_video_1, path_video_2):
         if store_output:
           if out == None:
             out = cv2.VideoWriter('out.avi', fourcc, 30.0, (matches_img.shape[1], matches_img.shape[0]), True)
-          out.write(matches_img)
+          if not recalculate_fps:
+            out.write(matches_img)
+          else:
+            video_insert(matches_img)
         cv2.imshow("Matches", matches_img)
         cv2.waitKey(1)
       if store_output:
         if out is not None:
+          if recalculate_fps:
+            video_close()
           out.release()
       print('--- STATS ---')
       total_time = time.time() - total_time_init
@@ -430,6 +410,23 @@ def compare_videos(path_video_1, path_video_2):
       print('TOTAL FRAMES: ', total_frames)
       print('SKIPS NUMBER: ', skips_number)
       print('MAX SKIP: ', skips_max)
+
+def video_insert(frame):
+  global out, last_frame, last_time
+  if last_time is None:
+    last_time = time.time()
+  else:
+    num_frames = math.floor((time.time() - last_time) * out_fps)
+    last_time = time.time()
+    for i in range(num_frames):
+      out.write(last_frame)
+  last_frame = frame
+
+def video_close():
+  global out, last_frame, last_time
+  num_frames = math.floor((time.time() - last_time) * out_fps)
+  for i in range(num_frames):
+    out.write(last_frame)
 
 def is_matched_area_okay(matched_area, frame_2_shape):
   return True
@@ -1013,3 +1010,33 @@ with detection_graph.as_default():
       print(len(good))
       matches_img = cv2.drawMatches(frame_1, desc_kp_1, frame_2, desc_kp_2, good[:show_points], None)
 """        
+
+
+# Resolution: 1920 x 1080
+#
+# 2D color
+# Operations = 1920 x 1080 x 3
+# Time = 2.372
+#
+# 2D gray
+# Operations = 1920 x 1080
+# Time = 0.521
+#
+# SURF
+# Time = 0.243
+#
+# CNN
+# Time = 0.087
+#
+# Tracking
+# Time = 0.003
+#
+# FLANN
+# Size 1 = 4542
+# Size 2 = 4117
+# Time = 0.109
+#
+# BFMatcher
+# Size 1 = 4542
+# Size 2 = 4117
+# Time = 0.164

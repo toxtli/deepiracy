@@ -8,11 +8,21 @@ Run
 
 ## Quickstart
 
-Example how to run it
+Parameters:
+
+python app.py [from_frame_number] [to_frame_number] [how_many_frames] [video_path_1_or_url] [video_path_2_or_url]
+
+Example how to run it with files
 
 > python app.py 1 1 -1 video1.mp4 video1.mp4
 
-python app.py [from_frame_number] [to_frame_number] [how_many_frames] [video_path_1_or_url] [video_path_2_or_url]
+Example how to run it with youtube URLs
+
+> python app.py 1 1 -1 https://www.youtube.com/watch?v=E5K_Ug0Gq0Y https://www.youtube.com/watch?v=E5K_Ug0Gq0Y
+
+Example how to run the real-time detection from webcam
+
+> python app.py 1 1 -1 video1.mp4 0
 
 The required files can be downloaded from here:
 
