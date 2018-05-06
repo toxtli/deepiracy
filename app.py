@@ -129,9 +129,8 @@ def compare_videos(path_video_1, path_video_2):
       if frame_num == -1:
         until_end = True
       while frame_num or until_end:
-        if not recalculate_fps:
-          total_frames += 1
-        else:
+        total_frames += 1
+        if recalculate_fps:
           if at_least_one_match:
             to_frame = from_frame_1 + math.ceil((time.time() - recalculate_time) * fps_1)
             if to_frame >= frame_num:
