@@ -1,4 +1,6 @@
-# anti-piracy-video-detection-neural-networks-string-algorithms
+# Deepiracy
+
+Deepary is a tool that is able to find a source video on a taget video. It is capable to detect subsequences of the source video, even if it is highly distorted. You can read a complete explanation of how this work by reading [this article](https://medium.com/hci-wvu/piracy-detection-using-longest-common-subsequence-and-neural-networks-a6f689a541a6).
 
 ## Installation
 
